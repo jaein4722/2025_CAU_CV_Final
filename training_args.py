@@ -6,58 +6,59 @@ from torch.optim.lr_scheduler import _LRScheduler
 
 
 def Make_Optimizer(model):
-    magic = "sgd_lcnet"
+    magic = "sgd"
     
     if magic == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+        
     elif magic == "sgd":
-        optimizer = torch.optim.SGD(model.parameters(), lr=4.5e-2, momentum=0.9, weight_decay=1e-4)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9, weight_decay=1e-4)
+        
     elif magic == "sgd_lcnet":
         optimizer = torch.optim.SGD(model.parameters(), lr=0.02, momentum=0.9, weight_decay=1e-4)
+        
     elif magic == "adamw":
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        
     elif magic == "baseline":
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+        
     else:
         raise ValueError(f"Unsupported optimizer: {magic}. Use 'adam' or 'sgd'.")
     return optimizer
 
 
 def Make_LR_Scheduler(optimizer):
-    magic = "warmup_poly_lcnet"
+    magic = "warmup_cosine"
     
     if magic == "warmup_cosine":
-        lr_scheduler = WarmupCosineLR(optimizer, T_max = 30, eta_min = 1e-6)
+        lr_scheduler = WarmupCosineLR(optimizer, T_max = 30, warmup_iters = 2, eta_min = 1e-6)
+        
     elif magic == "warmup_poly":
-        lr_scheduler = WarmupPolyLR(optimizer, T_max = 30, cur_iter = 0, warmup_factor = 1.0 / 3, warmup_iters = 500, eta_min = 1e-6, power = 0.9)
-    elif magic == "warmup_poly_lcnet":
         lr_scheduler = WarmupPolyLR(optimizer, T_max = 30, warmup_iters = 2, eta_min = 1e-6, power = 0.9)
+        
     elif magic == "constant":
         lr_scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=1)
+        
     elif magic == "baseline":
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = 30, eta_min = 1e-6)
+        
     else:
         raise ValueError(f"Unsupported lr scheduler: {magic}. Use 'cosine' or 'constant'.")
     return lr_scheduler
 
 
 def Make_Loss_Function(number_of_classes):
-    magic = "dynamic"
+    
     BINARY_SEG = True if number_of_classes==2 else False
     WORK_MODE = "binary" if BINARY_SEG else "multiclass"
     
-    if magic == "cross_entropy":
+    if BINARY_SEG:
         loss = CrossEntropyLoss2d(mode=WORK_MODE)
-    elif magic == "focal":
-        loss = FocalLoss2d(mode=WORK_MODE)
-    elif magic == "dynamic":
-        loss = DynamicSegLoss(mode=WORK_MODE)
-    elif magic == "baseline":
-        loss = DiceCELoss(mode=WORK_MODE)
     else:
-        raise ValueError(f"Unsupported loss function: {magic}.")
+        loss = DiceCELoss(mode=WORK_MODE)
+    
     return loss
-
 
 class WarmupCosineLR(_LRScheduler):
     """
