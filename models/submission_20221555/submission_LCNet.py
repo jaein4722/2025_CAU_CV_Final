@@ -31,7 +31,7 @@ class BNPReLU(nn.Module):
     def __init__(self, nIn):
         super().__init__()
         self.bn = nn.BatchNorm2d(nIn, eps=1e-3)
-        self.acti = nn.SELU(nIn)
+        self.acti = nn.SELU()
 
     def forward(self, input):
         output = self.bn(input)
@@ -98,25 +98,25 @@ class TCA(nn.Module):
        
 
 class PCT(nn.Module):
-    def __init__(self, nIn, d=1, dropout=0, p = 0.5):
+    def __init__(self, nIn, d=1, dropout=0, p=0.5):
         super().__init__()
         self.p = p
-        c = int(nIn) - round(int(nIn) * (1-p))
-    
-        self.TCA = TCA(c,d)
-        
+        # p 비율만큼 채널을 뽑아 TCA에 통과
+        c = nIn - round(nIn * (1 - p))     # 유지
+        self.TCA = TCA(c, d)                # 유지
+        # 채널을 다시 합치기 위한 1×1 conv (BN+SELU 포함)
         self.conv1x1 = Conv(nIn, nIn, 1, 1, padding=0, bn_acti=True)
-      
 
-    def forward(self, input):
-        
-        output1, output2 = Split(input,self.p)
-       
-        output2 = self.TCA(output2)
-        
-        output = torch.cat([output1, output2], dim=1)
-        output = self.conv1x1(output)
-        return output
+    def forward(self, x):
+        identity = x                        # <-- ① residual branch (그냥 복사)
+
+        x1, x2 = Split(x, self.p)           # Partial-Channel Split
+        x2 = self.TCA(x2)                   # Local-Context 추출
+        out = torch.cat([x1, x2], dim=1)    # 채널 재결합
+        out = self.conv1x1(out)             # 채널 셔플 + 적응
+
+        out += identity                     # <-- ② skip connection 추가
+        return F.selu(out)                  # 활성화까지 포함
 class Bottleneck(nn.Module):
     # 前面1x1和3x3卷积的filter个数相等，最后1x1卷积是其expansion倍
     
