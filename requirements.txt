@@ -15,3 +15,6 @@ seaborn
 scipy>=1.9.0
 optuna>=3.0.0
 natsort
+tabulate
+ipywidgets
+ipykernel
