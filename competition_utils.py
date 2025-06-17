@@ -31,7 +31,6 @@ import torchvision.transforms.functional as TF
 from torch.utils.data import Dataset, DataLoader 
 from monai.losses import TverskyLoss as TverskyLoss
 import albumentations as A
-
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 def control_random_seed(seed, pytorch=True):
     random.seed(seed)
@@ -46,7 +45,6 @@ def control_random_seed(seed, pytorch=True):
             torch.use_deterministic_algorithms(True)
     except:
         pass
-        torch.backends.cudnn.benchmark = False
 def imread_kor ( filePath, mode=cv2.IMREAD_UNCHANGED ) : 
     stream = open( filePath.encode("utf-8") , "rb") 
     bytes = bytearray(stream.read()) 
