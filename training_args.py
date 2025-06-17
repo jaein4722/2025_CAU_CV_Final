@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import _LRScheduler
+from monai.losses import TverskyLoss
 
 
 def Make_Optimizer(model):
@@ -15,7 +16,7 @@ def Make_Optimizer(model):
         optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9, weight_decay=1e-4)
         
     elif magic == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
     
     elif magic == "baseline":
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
@@ -26,10 +27,15 @@ def Make_Optimizer(model):
 
 
 def Make_LR_Scheduler(optimizer):
-    magic = "warmup_poly"
+    magic = "warmup_cosine"
     
     if magic == "warmup_cosine":
-        lr_scheduler = WarmupCosineLR(optimizer, T_max = 30, warmup_iters = 2, eta_min = 1e-6)
+        lr_scheduler = WarmupCosineLR(
+            optimizer,
+            T_max=50,               # 총 Epoch 수
+            warmup_iters=5,        # 5 Epoch warm-up
+            warmup_factor=1/10,     # 시작 lr = base_lr * 0.1
+            eta_min=1e-6)
         
     elif magic == "warmup_poly":
         lr_scheduler = WarmupPolyLR(
@@ -57,9 +63,9 @@ def Make_Loss_Function(number_of_classes):
     WORK_MODE = "binary" if BINARY_SEG else "multiclass"
     
     if BINARY_SEG:
-        loss = DiceCELoss(mode=WORK_MODE)
+        loss = DiceCELoss(weight=0.5, mode='binary')
     else:
-        loss = UniformCBCE_Lovasz(number_of_classes)
+        loss = UniformCBCE_LovaszProb(number_of_classes)
     
     return loss
 
@@ -192,52 +198,141 @@ class DiceCELoss:
         return combined_loss
 
 
-class UniformCBCE_Lovasz(nn.Module):
+class UniformCBCE_LovaszProb(nn.Module):
     """
-    · 모든 전경 클래스 가중치는 1.0
-    · 배경(class 0) 은 `bg_factor` (<1) 로 낮춰서 편향 완화
-    · CE + Lovász-Softmax 결합 손실
+    · 입력  : Softmax 확률맵  (B, C, H, W)
+    · 출력  : CE(NLL) + Lovász-Softmax 결합 손실
+    · 배경(class 0) 은 bg_factor 로 가중치 축소
     """
-    def __init__(self,
-                 num_classes: int,
-                 bg_factor: float = 0.01,
-                 coef_ce: float = 0.6,
-                 coef_iou: float = 0.4):
+    def __init__(
+        self,
+        num_classes: int,
+        bg_factor: float = 0.05,
+        coef_ce: float = 0.6,
+        coef_iou: float = 0.4,
+        eps: float = 1e-8,
+    ):
         super().__init__()
+        self.eps = eps
+        # --- 클래스별 가중치 (배경 축소) ---
         weight = torch.ones(num_classes, dtype=torch.float32)
-        weight[0] = bg_factor                # 배경만 낮춤
-        self.ce   = nn.CrossEntropyLoss(weight=weight)
-        self.coeff_ce, self.coeff_iou = coef_ce, coef_iou
+        weight[0] = bg_factor
+        self.register_buffer("ce_weight", weight)  # → 단순 텐서로만 보관
 
-    # -------- Lovász 순수 PyTorch 구현 (간략 버전) --------
+        self.ce_w = coef_ce
+        self.iou_w = coef_iou
+        self.num_classes = num_classes
+
+    # -------------------------------------------------
+    # 1) 결정론 Cross-Entropy (GPU에서도 deterministic)
+    # -------------------------------------------------
     @staticmethod
-    def lovasz_softmax(probs, labels, classes='present'):
-        # probs: (B,C,H,W), labels: (B,H,W)
-        B, C, *_ = probs.shape
+    def ce2d_deterministic(logits, target, weight=None, ignore_index=-100, eps=1e-7):
+        """
+        logits : (N, C, H, W)  – Softmax 적용 전 값
+        target : (N, H, W)     – 정수 라벨
+        weight : (C,) or None  – 클래스 가중치
+        """
+        log_p = torch.log_softmax(logits, dim=1)                # (N,C,H,W)
+
+        # gather 로 GT 위치의 log-prob만 추출
+        log_p = log_p.gather(1, target.unsqueeze(1))            # (N,1,H,W) – det.
+        log_p = log_p.squeeze(1)                                # (N,H,W)
+
+        mask = (target != ignore_index)
+        if weight is not None:
+            w = weight[target]                                  # 클래스별 가중치 맵
+            loss = -(w * log_p * mask).sum() / (w * mask).sum()
+        else:
+            loss = -(log_p * mask).sum() / mask.sum()
+
+        return loss
+
+    # -------------------------------------------------
+    # 2) Lovász-Softmax (확률 입력, deterministic OK)
+    # -------------------------------------------------
+    @staticmethod
+    def lovasz_softmax(probs, labels, eps=1e-6):
+        """
+        probs  : (B,C,H,W) – Softmax 확률
+        labels : (B,H,W)   – 정수 라벨
+        """
+        B, C, H, W = probs.shape
         losses = []
         for c in range(C):
-            fg = (labels == c).float()                 # foreground mask
-            if classes == 'present' and fg.sum() == 0:
+            fg = (labels == c).float()                     # (B,H,W)
+            if fg.sum() == 0:
                 continue
-            pc = probs[:, c, ...]
+            pc = probs[:, c]                               # (B,H,W)
             errors = (fg - pc).abs()
-            errors_sorted, perm = torch.sort(errors.view(B, -1), dim=1, descending=True)
+
+            errors_sorted, perm = torch.sort(
+                errors.view(B, -1), dim=1, descending=True
+            )
             fg_sorted = fg.view(B, -1).gather(1, perm)
-            grad = torch.cumsum(fg_sorted, dim=1) / fg_sorted.sum(dim=1, keepdim=True).clamp(min=1)
-            loss = (errors_sorted * grad).sum(dim=1)   # (B,)
-            # 🔧 픽셀 수로 정규화
-            pixel_cnt = fg.numel()                     # H*W
-            loss = (loss / pixel_cnt).mean()
-            
+
+            grad = torch.cumsum(fg_sorted, dim=1)
+            grad = grad / fg_sorted.sum(dim=1, keepdim=True).clamp(min=1)
+
+            loss = (errors_sorted * grad).sum(dim=1) / (H * W)  # (B,)
             losses.append(loss)
+
         return torch.stack(losses).mean() if losses else torch.tensor(0., device=probs.device)
 
-    def forward(self, logits, target):
-        target = target.squeeze(1).long()         # (B,H,W)
+    # -------------------------------------------------
+    def forward(self, probs, target):
+        """
+        probs  : Softmax 확률 (B,C,H,W)
+        target : GT 라벨 (B,1,H,W) or (B,H,W)
+        """
+        if probs.dtype != torch.float32:
+            probs = probs.float()
+
+        if target.ndim == 4:            # (B,1,H,W) → (B,H,W)
+            target = target.squeeze(1).long()
+        else:
+            target = target.long()
+
+        # 1) CE 손실 (deterministic)
+        loss_ce = self.ce2d_deterministic(
+            logits=torch.log(probs.clamp(min=self.eps)),
+            target=target,
+            weight=self.ce_weight.to(probs.device),
+        )
+
+        # 2) Lovász-Softmax 손실
+        loss_iou = self.lovasz_softmax(probs, target, eps=self.eps)
+
+        return self.ce_w * loss_ce + self.iou_w * loss_iou
+
+    
+class FocalTverskyLoss(nn.Module):
+    """
+    Focal Loss와 Tversky Loss를 결합하여 클래스 불균형과 어려운 예제에 집중.
+    """
+    def __init__(self, alpha=0.3, beta=0.7, gamma=2.0, smooth=1e-6, mode='binary'):
+        super().__init__()
+        self.alpha = alpha  # Tversky alpha (False Positives 가중치)
+        self.beta = beta    # Tversky beta (False Negatives 가중치)
+        self.gamma = gamma  # Focal gamma
+        self.smooth = smooth
+
+    def __call__(self, pred, target):
+        # target의 타입을 float으로 변경
+        target = target.float()
+
+        # Tversky Loss 계산
+        # monai의 TverskyLoss는 (B,C,H,W) 입력을 기대하므로 pred를 그대로 사용
+        # target은 (B,1,H,W) 이므로 squeeze 불필요
+        tversky_loss_fn = TverskyLoss(sigmoid=True, alpha=self.alpha, beta=self.beta)
+        tversky_loss = tversky_loss_fn(pred, target)
+
+        # Focal Loss 계산
+        pred_sig = torch.sigmoid(pred)
+        ce_loss = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
+        p_t = pred_sig * target + (1 - pred_sig) * (1 - target)
+        focal_term = (1 - p_t).pow(self.gamma)
+        focal_loss = (focal_term * ce_loss).mean()
         
-        if self.ce.weight is not None and self.ce.weight.device != logits.device:
-            self.ce.weight = self.ce.weight.to(logits.device)
-            
-        loss_ce  = self.ce(logits, target)
-        loss_iou = self.lovasz_softmax(F.softmax(logits,1), target)
-        return self.coeff_ce * loss_ce + self.coeff_iou * loss_iou
+        # 두 손실을 결합 (가중치는 1:1로 설정, 실험을 통해 조절 가능)
+        return focal_loss + tversky_loss

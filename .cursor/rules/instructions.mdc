@@ -1,0 +1,66 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+You are assisting with a university Computer Vision final project focused on semantic segmentation.  
+Read the rules below carefully; remember them throughout the conversation.  
+**Always answer in Korean only.**
+
+### 1. Overall goal  
+Design, implement, tune, and evaluate **one** new segmentation model that will be trained from scratch and compared on five fixed 256 × 256 datasets:
+
+| # | Dataset | Domain | Classes | Split (train/val/test) |
+|---|---------|--------|---------|------------------------|
+| 1 | Pascal VOC 2012 | General | 21 | 1747 / 583 / 583 |
+| 2 | ETIS-LaribPolypDB | Medical | 2 | 118 / 39 / 39 |
+| 3 | CVPPP2017-LSC | Plant | 2 | 972 / 324 / 324 |
+| 4 | CFD | Crack | 2 | 70 / 24 / 24 |
+| 5 | CarDD | Car damage | 2 | 310 / 104 / 104 |
+
+### 2. Evaluation & scoring  
+* Compute IoU, Dice, Precision, Recall per dataset.  
+* **Primary metric:** arithmetic mean IoU across the five datasets.  
+* Rank all submitted models by (a) trainable parameter count (smaller → better) and (b) mean IoU (larger → better).  
+* Convert each rank to a score between 1.0 (best) and 0.2 (worst), then take the **geometric mean** of the two scores.  
+* Final score = 32 × (parameter-score) × (accuracy-score).
+
+### 3. Hard constraints (immutable)  
+* ≤ **10,000** trainable parameters (verify by code) - **CRITICAL CONSTRAINT**
+* **No pretrained weights, no data augmentation.**  
+* Fixed training loop: 30 epochs, batch 16.  
+* Model constructor **must** be `__init__(self, in_channels, num_classes)`. No extra args.  
+* Do **not** modify `competition_main.ipynb`, `Model_Test.ipynb`, or the core training loop.
+
+### 4. Allowed changes  
+* Edit / add Python files only under `models/` and `training_args.py` (optimizer, scheduler, loss).  
+* You may update `requirements.txt`.  
+* Restructuring / refactoring the original modules is encouraged and earns up to 4 bonus points.
+
+### 5. Forbidden changes  
+Anything outside §4 (e.g., data splits, augmentation, core notebooks) is prohibited.
+
+### 6. Key lessons learned (from 83+ experiments)
+* **WarmupCosineLR scheduler is essential** for training stability
+* **Depthwise Separable Convolution** is crucial for parameter efficiency
+* **Channel splitting** (HWNet style) provides good efficiency vs performance tradeoff
+* Current best: test model (0.4333 IoU, 20,274 params), MicroNetv13 (0.3783 IoU, 6,937 params)
+* **Parameter distribution**: Encoder 40-50%, Decoder 30-40%, Skip/Attention 10-20%
+
+### 7. Deliverables (to be written in Korean)  
+1. **모델 아키텍처 설계 및 선택 근거**  
+2. **하이퍼파라미터 튜닝 전략** (search space, method, compute budget)  
+3. **기존 노트북·유틸리티와의 통합 방안**  
+4. **검증 프로토콜 및 체크포인트 선정 기준**  
+5. **(선택) 코드 스니펫 또는 수정 예시**
+
+### 8. Submission requirements  
+* Code in `models/{student_id}/` containing main class named `{student_id}`.  
+* `training_args.py` with chosen optimizer, scheduler, loss.  
+* Updated `requirements.txt`.  
+* Private GitHub repo shared with the TA by **23 : 59 (KST) on June 17**.  
+* PDF report (500–1000 Korean characters) explaining paper selection, model details, and claimed improvement points.
+
+---
+
+**Remember:** Output **must be Korean**; do not include English in replies.

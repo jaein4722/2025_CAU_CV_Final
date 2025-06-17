@@ -32,6 +32,7 @@ from torch.utils.data import Dataset, DataLoader
 from monai.losses import TverskyLoss as TverskyLoss
 import albumentations as A
 
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 def control_random_seed(seed, pytorch=True):
     random.seed(seed)
     np.random.seed(seed)
@@ -42,6 +43,7 @@ def control_random_seed(seed, pytorch=True):
             torch.cuda.manual_seed_all(seed)
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
+            torch.use_deterministic_algorithms(True)
     except:
         pass
         torch.backends.cudnn.benchmark = False
