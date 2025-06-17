@@ -293,7 +293,7 @@ class submission_MiniNetV9_Light(nn.Module):
 
 # 4-3. 전략 2 적용 모델 (성능 향상)
 class submission_MiniNetV9_Plus(nn.Module):
-    def __init__(self, in_channels: int, num_classes: int, ch: tuple = (6, 12, 18), interpolate: bool = True):
+    def __init__(self, in_channels: int, num_classes: int, ch: tuple = (8, 14, 18), interpolate: bool = True):
         super().__init__()
         self.interpolate = interpolate
         c1, c2, c3 = ch
@@ -342,7 +342,7 @@ if __name__ == "__main__":
 
     print("\n" + "="*50)
     print("─── 3. 전략 2: MiniNetV9-Plus (성능 향상, 오류 수정) ✨ ───")
-    net_plus = submission_MiniNetV9_Plus(in_channels=in_channels, num_classes=num_classes, ch=ch_cfg)
+    net_plus = submission_MiniNetV9_Plus(in_channels=in_channels, num_classes=num_classes)
     y_plus = net_plus(x)
     params_plus = sum(p.numel() for p in net_plus.parameters() if p.requires_grad)
     print(f"출력 크기 : {y_plus.shape}")
